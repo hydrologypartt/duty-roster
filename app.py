@@ -51,6 +51,95 @@ def month_days(y,m):
     end=date(y+1,1,1) if m==12 else date(y,m+1,1)
     return [start+timedelta(days=i) for i in range((end-start).days)]
 
+def load_font(size, bold=False):
+    # รองรับ TH Sarabun PSK หากผู้ใช้ใส่ไฟล์ฟอนต์ไว้ในโฟลเดอร์ fonts
+    names = [
+        "THSarabunPSK.ttf" if not bold else "THSarabunPSK-Bold.ttf",
+        "THSarabunNew.ttf" if not bold else "THSarabunNew-Bold.ttf",
+        "NotoSansThai-Regular.ttf" if not bold else "NotoSansThai-Bold.ttf",
+    ]
+    roots = [os.path.join(os.path.dirname(__file__), "fonts"), os.path.dirname(__file__),
+             "/usr/share/fonts/truetype/noto"]
+    for root in roots:
+        for name in names:
+            fp=os.path.join(root,name)
+            if os.path.exists(fp):
+                try:
+                    return ImageFont.truetype(fp,size)
+                except Exception:
+                    pass
+    return ImageFont.load_default()
+
+def schedule_matrix(ds):
+    if not ds:
+        return pd.DataFrame()
+    max_slot=max(int(x.get("slot",1)) for x in ds)
+    by={}
+    for x in ds:
+        by.setdefault(x["duty_date"],{})[int(x.get("slot",1))]=x.get("people",{}).get("name","")
+    rows=[]
+    for d in sorted(by):
+        dt=date.fromisoformat(d)
+        row={"วันที่":f"{dt.day:02d}/{dt.month:02d}/{dt.year+543}","วัน":SHORT_WD[dt.weekday()]}
+        for slot in range(1,max_slot+1):
+            row[f"เวร {slot}"]=by[d].get(slot,"")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+def build_schedule_image(ds, m):
+    max_slot=max([int(x.get("slot",1)) for x in ds], default=1)
+    rows=sorted({x["duty_date"] for x in ds})
+    W=max(1500, 340+300*max_slot)
+    row_h=72
+    H=150+row_h*(len(rows)+1)
+    im=Image.new("RGB",(W,H),"white")
+    dr=ImageDraw.Draw(im)
+    title_font=load_font(46,True)
+    head_font=load_font(28,True)
+    body_font=load_font(27,False)
+    small_font=load_font(23,False)
+    title=f"ตารางเวรกลางวัน {month_text(m['year'],m['month'])}"
+    dr.text((40,25),title,fill="black",font=title_font)
+
+    x0=40; y0=100
+    date_w=180; day_w=120; slot_w=(W-x0*2-date_w-day_w)//max_slot
+    widths=[date_w,day_w]+[slot_w]*max_slot
+    headers=["วันที่","วัน"]+[f"เวร {i}" for i in range(1,max_slot+1)]
+
+    # header
+    x=x0
+    for w,hdr in zip(widths,headers):
+        dr.rectangle((x,y0,x+w,y0+row_h),outline="black",width=2)
+        bbox=dr.textbbox((0,0),hdr,font=head_font)
+        tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+        dr.text((x+(w-tw)/2,y0+(row_h-th)/2-4),hdr,fill="black",font=head_font)
+        x+=w
+
+    by={}
+    for item in ds:
+        by.setdefault(item["duty_date"],{})[int(item.get("slot",1))]=item.get("people",{}).get("name","")
+    y=y0+row_h
+    for d in rows:
+        dt=date.fromisoformat(d)
+        values=[f"{dt.day:02d}/{dt.month:02d}/{dt.year+543}",SHORT_WD[dt.weekday()]]+[by[d].get(i,"") for i in range(1,max_slot+1)]
+        x=x0
+        for idx,(w,val) in enumerate(zip(widths,values)):
+            dr.rectangle((x,y,x+w,y+row_h),outline="black",width=1)
+            font=small_font if idx>=2 else body_font
+            bbox=dr.textbbox((0,0),str(val),font=font)
+            tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+            if tw>w-16:
+                # ตัดข้อความยาวให้ยังอ่านได้
+                txt=str(val)
+                while len(txt)>3 and dr.textbbox((0,0),txt+"…",font=font)[2]>w-16:
+                    txt=txt[:-1]
+                val=txt+"…" if txt!=str(val) else txt
+                bbox=dr.textbbox((0,0),str(val),font=font); tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+            dr.text((x+(w-tw)/2,y+(row_h-th)/2-4),str(val),fill="black",font=font)
+            x+=w
+        y+=row_h
+    return im
+
 # Sidebar
 with st.sidebar:
     st.markdown("## 🔐 Admin")
@@ -100,12 +189,36 @@ if not admin():
     current={x["unavailable_date"] for x in rows}
     open_now=today<=deadline or bool(m["admin_override"])
     if open_now:
-        chosen=st.multiselect(
-            "เลือกวันที่ไม่สามารถอยู่เวรได้",
-            days,
-            default=[d for d in days if d.isoformat() in current],
-            format_func=lambda d:f"{d.day:02d}/{d.month:02d}/{d.year+543} ({SHORT_WD[d.weekday()]})"
-        )
+        cal_key=f"calendar_{mid}_{pid}"
+        if cal_key not in st.session_state:
+            st.session_state[cal_key]=set(current)
+        selected=st.session_state[cal_key]
+
+        st.markdown("### 📅 ปฏิทินเลือกวันที่ไม่สามารถอยู่เวรได้")
+        st.caption("คลิกวันที่เพื่อเลือก/ยกเลิกได้หลายวัน • วันที่เลือกจะแสดงเป็นปุ่มสีเด่น")
+        st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
+        head=st.columns(7)
+        for i,c in enumerate(head): c.markdown(f"**{SHORT_WD[i]}**")
+
+        # เติมช่องว่างก่อนวันที่ 1 เพื่อให้เหมือนปฏิทินจริง
+        first=date(m["year"],m["month"],1).weekday()
+        cells=[None]*first+days
+        for start in range(0,len(cells),7):
+            week=cells[start:start+7]
+            cols=st.columns(7)
+            for i,d in enumerate(week):
+                if d is None:
+                    cols[i].write("")
+                    continue
+                iso=d.isoformat(); picked=iso in selected
+                label=f"{d.day}"
+                if cols[i].button(label,type="primary" if picked else "secondary",use_container_width=True,key=f"cal_{mid}_{pid}_{iso}"):
+                    if picked: selected.remove(iso)
+                    else: selected.add(iso)
+                    st.rerun()
+
+        chosen=[d for d in days if d.isoformat() in selected]
+        st.info(f"เลือกแล้ว {len(chosen)} วัน: {', '.join(f'{d.day:02d}/{d.month:02d}' for d in chosen) if chosen else 'ยังไม่ได้เลือก'}")
         if st.button("💾 บันทึกวันไม่ว่าง",type="primary"):
             if used>=max_edits:
                 st.error("คุณใช้สิทธิ์แก้ไขครบแล้ว")
@@ -125,8 +238,7 @@ if not admin():
     st.subheader("📋 ตารางเวรที่ประกาศ")
     ds=duties(mid)
     if ds:
-        st.dataframe(pd.DataFrame([{"วันที่":x["duty_date"],"เวรที่":x["slot"],"ผู้ปฏิบัติงาน":x["people"]["name"]} for x in ds]),
-                     use_container_width=True,hide_index=True)
+        st.dataframe(schedule_matrix(ds),use_container_width=True,hide_index=True)
     else: st.info("ยังไม่มีตารางเวรที่ประกาศ")
     st.stop()
 
@@ -302,22 +414,24 @@ with tabs[4]:
                 sb.table("duty_months").update({"status":"ประกาศแล้ว"}).eq("id",mid).execute()
                 log("publish_schedule",mid); st.success("ประกาศแล้ว"); st.rerun()
 
-        # Export
-        st.divider(); st.subheader("📤 Export")
-        edf=pd.DataFrame([{"วันที่":x["duty_date"],"เวรที่":x["slot"],"ชื่อ":x["people"]["name"],"เบอร์โทร":x["people"]["phone"]} for x in ds])
-        st.download_button("📊 ดาวน์โหลด CSV (เปิดด้วย Excel ได้)",edf.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig"),
+        # Export + Preview
+        st.divider(); st.subheader("📤 Export / Preview")
+        st.markdown("#### ตารางเวรแนวนอน")
+        st.dataframe(schedule_matrix(ds),use_container_width=True,hide_index=True)
+
+        edf=schedule_matrix(ds)
+        # CSV แนวนอนเหมือนตารางประกาศ
+        st.download_button("📊 ดาวน์โหลด CSV (แนวนอน เปิดด้วย Excel ได้)",
+                           edf.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig"),
                            file_name=f"เวร_{m['year']}_{m['month']:02d}.csv",mime="text/csv")
-        W,H=1800,max(900,180+len(days)*55)
-        im=Image.new("RGB",(W,H),"white"); dr=ImageDraw.Draw(im)
-        try: fb=ImageFont.truetype("DejaVuSans-Bold.ttf",34); fn=ImageFont.truetype("DejaVuSans.ttf",25)
-        except: fb=fn=ImageFont.load_default()
-        dr.text((50,30),f"ตารางเวร {month_text(m['year'],m['month'])}",fill="black",font=fb)
-        y=100; by=defaultdict(list)
-        for x in ds: by[x["duty_date"]].append(x["people"]["name"])
-        for d in sorted(by):
-            dr.text((50,y),d,fill="black",font=fn); dr.text((330,y)," / ".join(by[d]),fill="black",font=fn); y+=55
-        bio=io.BytesIO(); im.save(bio,"JPEG",quality=92)
-        st.download_button("🖼️ ดาวน์โหลด JPEG",bio.getvalue(),file_name=f"เวร_{m['year']}_{m['month']:02d}.jpg",mime="image/jpeg")
+
+        im=build_schedule_image(ds,m)
+        st.markdown("#### 👀 ตัวอย่างภาพก่อน Export JPEG")
+        st.image(im,use_container_width=True)
+        bio=io.BytesIO(); im.save(bio,"JPEG",quality=95,optimize=True)
+        st.download_button("🖼️ ดาวน์โหลด JPEG",bio.getvalue(),
+                           file_name=f"เวร_{m['year']}_{m['month']:02d}.jpg",mime="image/jpeg")
+        st.caption("ภาพใช้ฟอนต์ TH Sarabun PSK/TH Sarabun New หากใส่ไฟล์ฟอนต์ไว้ในโฟลเดอร์ fonts; หากไม่มีจะใช้ Noto Sans Thai ซึ่งรองรับภาษาไทย")
     else: st.info("ยังไม่มีตารางเวร")
 
 with tabs[5]:
