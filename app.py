@@ -8,55 +8,41 @@ from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client
 
 st.set_page_config(page_title="ระบบจัดเวรออนไลน์", page_icon="📅", layout="wide")
-# Responsive layout: keep the calendar as a true 7-column grid on phones/tablets/desktops.
+
+# บังคับทุกกลุ่ม st.columns ให้คงเป็นแถวเดียว โดยเฉพาะปฏิทิน 7 คอลัมน์บนมือถือ
 st.markdown("""
 <style>
-.calendar-grid [data-testid="stHorizontalBlock"] {
-    display: flex !important;
-    flex-direction: row !important;
+/* Streamlit อาจ wrap columns เป็นแนวตั้งบนจอแคบ จึงบังคับให้ 7 ช่องของปฏิทินอยู่แถวเดียว */
+div[data-testid="stHorizontalBlock"] {
     flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
     width: 100% !important;
-    gap: clamp(2px, 0.7vw, 8px) !important;
-    align-items: stretch !important;
 }
-.calendar-grid [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-    flex: 1 1 0 !important;
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    min-width: 0 !important;
     width: 0 !important;
-    min-width: 0 !important;
+    flex: 1 1 0 !important;
 }
-.calendar-grid [data-testid="stHorizontalBlock"] [data-testid="stBaseButton-secondary"],
-.calendar-grid [data-testid="stHorizontalBlock"] [data-testid="stBaseButton-primary"] {
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] button {
     width: 100% !important;
     min-width: 0 !important;
-    min-height: clamp(38px, 9vw, 76px) !important;
-    height: clamp(38px, 9vw, 76px) !important;
-    padding: 0 !important;
-    font-size: clamp(13px, 3.5vw, 22px) !important;
-    line-height: 1 !important;
-    border-radius: clamp(5px, 1.5vw, 10px) !important;
-}
-.calendar-grid .calendar-head [data-testid="stMarkdownContainer"] p {
-    text-align: center !important;
-    font-size: clamp(12px, 3vw, 20px) !important;
-    margin: 0 !important;
-}
-.calendar-grid {
-    width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
+    min-height: 48px !important;
+    padding: 0.2rem 0.05rem !important;
+    font-size: clamp(0.72rem, 2.7vw, 1rem) !important;
+    white-space: nowrap !important;
 }
 @media (max-width: 480px) {
-    .calendar-grid [data-testid="stHorizontalBlock"] { gap: 2px !important; }
-    .calendar-grid [data-testid="stHorizontalBlock"] [data-testid="stBaseButton-secondary"],
-    .calendar-grid [data-testid="stHorizontalBlock"] [data-testid="stBaseButton-primary"] {
-        min-height: 42px !important;
-        height: 42px !important;
-        font-size: 14px !important;
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.12rem !important;
     }
-    .calendar-grid .calendar-head [data-testid="stMarkdownContainer"] p { font-size: 13px !important; }
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] button {
+        min-height: 42px !important;
+        border-radius: 6px !important;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
+
 URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
 KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
 if not URL or not KEY:
@@ -100,7 +86,7 @@ def month_days(y,m):
     return [start+timedelta(days=i) for i in range((end-start).days)]
 
 def load_font(size, bold=False):
-    # ฟอนต์หลักภาษาไทย + fallback สำหรับตัวเลข/อังกฤษ
+    # รองรับ TH Sarabun PSK หากผู้ใช้ใส่ไฟล์ฟอนต์ไว้ในโฟลเดอร์ fonts
     names = [
         "THSarabunPSK.ttf" if not bold else "THSarabunPSK-Bold.ttf",
         "THSarabunNew.ttf" if not bold else "THSarabunNew-Bold.ttf",
@@ -117,89 +103,6 @@ def load_font(size, bold=False):
                 except Exception:
                     pass
     return ImageFont.load_default()
-
-def load_latin_font(size, bold=False):
-    # Noto Sans Thai ที่มากับแอปเป็นฟอนต์ Thai-only จึงใช้ DejaVu สำหรับเลข/อังกฤษ/เครื่องหมาย
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ]
-    for fp in candidates:
-        if os.path.exists(fp):
-            try:
-                return ImageFont.truetype(fp,size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def _font_supports(font, ch):
-    # PIL FreeTypeFont มี getmask; ถ้าตัวอักษรไม่มี glyph จะเกิด tofu/box
-    try:
-        return font.getmask(ch).getbbox() is not None
-    except Exception:
-        return False
-
-def mixed_runs(text, thai_font, latin_font):
-    """แบ่งข้อความเป็นช่วงตามฟอนต์ที่รองรับ เพื่อให้ไทย+เลข+อังกฤษอยู่ในบรรทัดเดียวกันได้"""
-    runs=[]
-    for ch in str(text):
-        f = thai_font if _font_supports(thai_font, ch) else latin_font
-        if runs and runs[-1][0] is f:
-            runs[-1]=(f,runs[-1][1]+ch)
-        else:
-            runs.append((f,ch))
-    return runs
-
-def mixed_textbbox(draw, text, thai_font, latin_font):
-    # คำนวณกรอบข้อความจาก glyph จริงของแต่ละช่วง
-    width=0; top=10**9; bottom=-10**9
-    for f,part in mixed_runs(text, thai_font, latin_font):
-        b=draw.textbbox((0,0),part,font=f)
-        width += b[2]-b[0]
-        top=min(top,b[1]); bottom=max(bottom,b[3])
-    if top==10**9:
-        return (0,0,0,0)
-    return (0,top,width,bottom)
-
-def mixed_draw_text(draw, xy, text, thai_font, latin_font, fill="black"):
-    x,y=xy
-    for f,part in mixed_runs(text, thai_font, latin_font):
-        draw.text((x,y),part,fill=fill,font=f)
-        b=draw.textbbox((0,0),part,font=f)
-        x += b[2]-b[0]
-
-def mixed_text_width(draw, text, thai_font, latin_font):
-    b=mixed_textbbox(draw,text,thai_font,latin_font)
-    return b[2]-b[0]
-
-# วันหยุดพิเศษ/วันหยุดราชการที่ต้องการเน้นสีในปี 2569 (ค.ศ. 2026)
-# 16 ต.ค. 2569 เป็นวันหยุดราชการเป็นกรณีพิเศษเฉพาะพื้นที่กรุงเทพมหานคร
-SPECIAL_HOLIDAYS = {
-    date(2026, 10, 16): "วันหยุดพิเศษ (กทม.)",
-}
-
-def schedule_day_type(d):
-    """คืนประเภทวันสำหรับการไฮไลท์ตาราง"""
-    if d in SPECIAL_HOLIDAYS:
-        return "special"
-    if d.weekday() >= 5:
-        return "weekend"
-    return "weekday"
-
-def style_schedule_dataframe(df):
-    if df.empty:
-        return df
-    def row_style(row):
-        try:
-            parts=str(row.get("วันที่","")).split("/")
-            d=date(int(parts[2])-543,int(parts[1]),int(parts[0]))
-            typ=schedule_day_type(d)
-        except Exception:
-            typ="weekday"
-        if typ in ("weekend","special"):
-            return ["background-color: #FDE2E2"]*len(row)
-        return [""]*len(row)
-    return df.style.apply(row_style, axis=1)
 
 def schedule_matrix(ds):
     if not ds:
@@ -229,26 +132,21 @@ def build_schedule_image(ds, m):
     head_font=load_font(28,True)
     body_font=load_font(27,False)
     small_font=load_font(23,False)
-    title_latin=load_latin_font(46,True)
-    head_latin=load_latin_font(28,True)
-    body_latin=load_latin_font(27,False)
-    small_latin=load_latin_font(23,False)
-    title=f"ตารางเวรกลางวัน {month_text(m['year'],m['month'])} {m['year']+543}"
-    tb=mixed_textbbox(dr,title,title_font,title_latin)
-    mixed_draw_text(dr,(40,25),title,title_font,title_latin)
+    title=f"ตารางเวรกลางวัน {month_text(m['year'],m['month'])}"
+    dr.text((40,25),title,fill="black",font=title_font)
 
     x0=40; y0=100
     date_w=180; day_w=120; slot_w=(W-x0*2-date_w-day_w)//max_slot
     widths=[date_w,day_w]+[slot_w]*max_slot
     headers=["วันที่","วัน"]+[f"เวร {i}" for i in range(1,max_slot+1)]
 
+    # header
     x=x0
     for w,hdr in zip(widths,headers):
         dr.rectangle((x,y0,x+w,y0+row_h),outline="black",width=2)
-        font=head_font; latin=head_latin
-        bbox=mixed_textbbox(dr,hdr,font,latin)
+        bbox=dr.textbbox((0,0),hdr,font=head_font)
         tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-        mixed_draw_text(dr,(x+(w-tw)/2,y0+(row_h-th)/2-4),hdr,font,latin)
+        dr.text((x+(w-tw)/2,y0+(row_h-th)/2-4),hdr,fill="black",font=head_font)
         x+=w
 
     by={}
@@ -259,23 +157,19 @@ def build_schedule_image(ds, m):
         dt=date.fromisoformat(d)
         values=[f"{dt.day:02d}/{dt.month:02d}/{dt.year+543}",SHORT_WD[dt.weekday()]]+[by[d].get(i,"") for i in range(1,max_slot+1)]
         x=x0
-        day_type=schedule_day_type(dt)
-        row_fill="#FDE2E2" if day_type in ("weekend","special") else "white"
         for idx,(w,val) in enumerate(zip(widths,values)):
-            dr.rectangle((x,y,x+w,y+row_h),fill=row_fill,outline="black",width=1)
+            dr.rectangle((x,y,x+w,y+row_h),outline="black",width=1)
             font=small_font if idx>=2 else body_font
-            latin=small_latin if idx>=2 else body_latin
-            text=str(val)
-            bbox=mixed_textbbox(dr,text,font,latin)
+            bbox=dr.textbbox((0,0),str(val),font=font)
             tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
             if tw>w-16:
-                # ตัดข้อความยาว โดยวัดความกว้างด้วยฟอนต์ fallback ด้วย
-                txt=text
-                while len(txt)>3 and mixed_text_width(dr,txt+"…",font,latin)>w-16:
+                # ตัดข้อความยาวให้ยังอ่านได้
+                txt=str(val)
+                while len(txt)>3 and dr.textbbox((0,0),txt+"…",font=font)[2]>w-16:
                     txt=txt[:-1]
-                val=txt+"…" if txt!=text else txt
-                bbox=mixed_textbbox(dr,val,font,latin); tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-            mixed_draw_text(dr,(x+(w-tw)/2,y+(row_h-th)/2-4),val,font,latin)
+                val=txt+"…" if txt!=str(val) else txt
+                bbox=dr.textbbox((0,0),str(val),font=font); tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+            dr.text((x+(w-tw)/2,y+(row_h-th)/2-4),str(val),fill="black",font=font)
             x+=w
         y+=row_h
     return im
@@ -336,31 +230,26 @@ if not admin():
 
         st.markdown("### 📅 ปฏิทินเลือกวันที่ไม่สามารถอยู่เวรได้")
         st.caption("คลิกวันที่เพื่อเลือก/ยกเลิกได้หลายวัน • วันที่เลือกจะแสดงเป็นปุ่มสีเด่น")
-        st.markdown("<div class='calendar-grid'>", unsafe_allow_html=True)
+        st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
         head=st.columns(7)
-        for i,c in enumerate(head):
-            with c:
-                st.markdown(f"<div class='calendar-head'><p><b>{SHORT_WD[i]}</b></p></div>", unsafe_allow_html=True)
+        for i,c in enumerate(head): c.markdown(f"**{SHORT_WD[i]}**")
 
-        # เติมช่องว่างก่อนวันที่ 1 เพื่อให้เป็นปฏิทินจริง และรักษา 7 ช่องบนมือถือ
+        # เติมช่องว่างก่อนวันที่ 1 เพื่อให้เหมือนปฏิทินจริง
         first=date(m["year"],m["month"],1).weekday()
         cells=[None]*first+days
         for start in range(0,len(cells),7):
             week=cells[start:start+7]
-            week += [None]*(7-len(week))
             cols=st.columns(7)
             for i,d in enumerate(week):
-                with cols[i]:
-                    if d is None:
-                        st.markdown("<div style='height:clamp(38px,9vw,76px)'></div>", unsafe_allow_html=True)
-                        continue
-                    iso=d.isoformat(); picked=iso in selected
-                    label=f"{d.day}"
-                    if st.button(label,type="primary" if picked else "secondary",use_container_width=True,key=f"cal_{mid}_{pid}_{iso}"):
-                        if picked: selected.remove(iso)
-                        else: selected.add(iso)
-                        st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+                if d is None:
+                    cols[i].write("")
+                    continue
+                iso=d.isoformat(); picked=iso in selected
+                label=f"{d.day}"
+                if cols[i].button(label,type="primary" if picked else "secondary",use_container_width=True,key=f"cal_{mid}_{pid}_{iso}"):
+                    if picked: selected.remove(iso)
+                    else: selected.add(iso)
+                    st.rerun()
 
         chosen=[d for d in days if d.isoformat() in selected]
         st.info(f"เลือกแล้ว {len(chosen)} วัน: {', '.join(f'{d.day:02d}/{d.month:02d}' for d in chosen) if chosen else 'ยังไม่ได้เลือก'}")
@@ -562,10 +451,9 @@ with tabs[4]:
         # Export + Preview
         st.divider(); st.subheader("📤 Export / Preview")
         st.markdown("#### ตารางเวรแนวนอน")
-        edf=schedule_matrix(ds)
-        st.dataframe(style_schedule_dataframe(edf),use_container_width=True,hide_index=True)
-        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษ")
+        st.dataframe(schedule_matrix(ds),use_container_width=True,hide_index=True)
 
+        edf=schedule_matrix(ds)
         # CSV แนวนอนเหมือนตารางประกาศ
         st.download_button("📊 ดาวน์โหลด CSV (แนวนอน เปิดด้วย Excel ได้)",
                            edf.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig"),
