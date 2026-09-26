@@ -1,5 +1,5 @@
 
-import os, io, hashlib
+import os, io, hashlib, json
 from datetime import date, datetime, timedelta
 from collections import defaultdict
 import pandas as pd
@@ -35,8 +35,17 @@ def unavailable(mid):
 def duties(mid):
     return sb.table("duties").select("*,people(name,phone)").eq("month_id",mid).order("duty_date").order("slot").execute().data
 def log(action, mid=None, pid=None, details=None):
-    try: sb.table("audit_logs").insert({"action":action,"month_id":mid,"person_id":pid,"admin_username":admin(),"details":details or {}}).execute()
-    except Exception: pass
+    try:
+        payload = {"month_id": mid, "person_id": pid}
+        if details:
+            payload.update(details if isinstance(details, dict) else {"details": details})
+        sb.table("audit_logs").insert({
+            "action": action,
+            "admin_username": admin(),
+            "details": json.dumps(payload, ensure_ascii=False)
+        }).execute()
+    except Exception:
+        pass
 def month_days(y,m):
     start=date(y,m,1)
     end=date(y+1,1,1) if m==12 else date(y,m+1,1)
@@ -82,14 +91,14 @@ if not admin():
     pid=st.selectbox("เลือกชื่อของคุณ",list(ids),format_func=lambda x:ids[x])
     rows=[x for x in unavailable(mid) if x["person_id"]==pid]
     used=max([x["edit_no"] for x in rows],default=0)
-    max_edits=int(m["max_unavailable_edits"])
+    max_edits=int(m["max_edits"])
     today=date.today()
     deadline=date.fromisoformat(str(m["unavailable_deadline"]))
     st.info(f"แก้ไขได้ {max_edits} ครั้ง • ใช้ไปแล้ว {used} ครั้ง • ปิดรับวันที่ {deadline.strftime('%d/%m/%Y')}")
 
     days=month_days(m["year"],m["month"])
     current={x["unavailable_date"] for x in rows}
-    open_now=today<=deadline or bool(m["admin_override_open"])
+    open_now=today<=deadline or bool(m["admin_override"])
     if open_now:
         chosen=st.multiselect(
             "เลือกวันที่ไม่สามารถอยู่เวรได้",
@@ -127,6 +136,8 @@ if not admin():
 st.header("🛠 Admin Dashboard")
 tabs=st.tabs(["📊 ภาพรวม","📅 จัดการเดือน","👥 สมาชิก","🚫 วันไม่ว่าง","🤖 จัดเวร","💰 ค่าเวร","📜 ประวัติ","👑 Admin"])
 
+m = None
+
 if not months:
     st.info("ยังไม่มีเดือน กรุณาสร้างเดือนจากแท็บ 'จัดการเดือน'")
     create_only=True
@@ -143,7 +154,7 @@ with tabs[0]:
         a,b,c,d=st.columns(4)
         a.metric("สมาชิก",len(ps)); b.metric("ผู้แจ้งวันไม่ว่าง",len(set(x["person_id"] for x in un)))
         c.metric("รายการเวร",len(ds)); d.metric("สถานะ",m["status"])
-        st.write(f"**ช่วงรับวันไม่ว่าง:** {m['unavailable_start']} ถึง {m['unavailable_deadline']}  |  **แก้ได้:** {m['max_unavailable_edits']} ครั้ง")
+        st.write(f"**ช่วงรับวันไม่ว่าง:** {m['unavailable_start']} ถึง {m['unavailable_deadline']}  |  **แก้ได้:** {m['max_edits']} ครั้ง")
 
 with tabs[1]:
     st.subheader("สร้าง/แก้ไขเดือน")
@@ -160,7 +171,7 @@ with tabs[1]:
             r=sb.table("duty_months").insert({
                 "year":cy,"month":cm,"status":"รอรับวันไม่ว่าง",
                 "unavailable_start":cs.isoformat(),"unavailable_deadline":ce.isoformat(),
-                "max_unavailable_edits":me,"admin_override_open":override,
+                "max_edits":me,"admin_override":override,
                 "weekday_counts":{"0":4,"1":3,"2":4,"3":3,"4":3,"5":3,"6":3}
             }).execute()
             log("create_month",r.data[0]["id"],details={"year":cy,"month":cm})
@@ -171,7 +182,7 @@ with tabs[1]:
         if st.button("💾 บันทึก Deadline/จำนวนครั้ง/สิทธิ์ Admin Override"):
             sb.table("duty_months").update({
                 "unavailable_start":cs.isoformat(),"unavailable_deadline":ce.isoformat(),
-                "max_unavailable_edits":me,"admin_override_open":override
+                "max_edits":me,"admin_override":override
             }).eq("id",mid).execute()
             log("update_month_settings",mid); st.success("บันทึกแล้ว"); st.rerun()
         st.warning("การลบเดือนควรทำเมื่อแน่ใจ เพราะข้อมูลเวรและวันไม่ว่างของเดือนนั้นจะถูกลบตามความสัมพันธ์ฐานข้อมูล")
@@ -313,13 +324,17 @@ with tabs[5]:
     if not m: st.stop()
     st.subheader("💰 อัตราค่าเวร")
     rr=sb.table("duty_rates").select("*").eq("month_id",mid).execute().data
-    rm={x["rate_type"]:float(x["amount"]) for x in rr}
-    wd=st.number_input("วันธรรมดา",0.0,100000.0,rm.get("weekday",0.0),10.0)
-    we=st.number_input("เสาร์-อาทิตย์",0.0,100000.0,rm.get("weekend",0.0),10.0)
-    hd=st.number_input("วันหยุดราชการ/วันหยุดพิเศษ",0.0,100000.0,rm.get("holiday",0.0),10.0)
+    rm=rr[0] if rr else {}
+    wd=st.number_input("วันธรรมดา",0.0,100000.0,float(rm.get("weekday_rate",0)),10.0)
+    we=st.number_input("เสาร์-อาทิตย์",0.0,100000.0,float(rm.get("weekend_rate",0)),10.0)
+    hd=st.number_input("วันหยุดราชการ/วันหยุดพิเศษ",0.0,100000.0,float(rm.get("holiday_rate",0)),10.0)
     if st.button("บันทึกอัตรา"):
-        for t,v in [("weekday",wd),("weekend",we),("holiday",hd)]:
-            sb.table("duty_rates").upsert({"month_id":mid,"rate_type":t,"amount":v},on_conflict="month_id,rate_type").execute()
+        sb.table("duty_rates").upsert({
+            "month_id":mid,
+            "weekday_rate":wd,
+            "weekend_rate":we,
+            "holiday_rate":hd
+        },on_conflict="month_id").execute()
         log("update_rates",mid); st.success("บันทึกแล้ว"); st.rerun()
     ds=duties(mid)
     if ds:
@@ -332,18 +347,18 @@ with tabs[5]:
 
 with tabs[6]:
     if not m: st.stop()
-    logs=sb.table("audit_logs").select("*").eq("month_id",mid).order("created_at",desc=True).execute().data
+    logs=sb.table("audit_logs").select("*").order("created_at",desc=True).execute().data
     st.dataframe(pd.DataFrame(logs)[["created_at","admin_username","action","details"]] if logs else pd.DataFrame(),
                  use_container_width=True,hide_index=True)
 
 with tabs[7]:
     st.subheader("👑 จัดการ Admin")
-    admins=sb.table("admins").select("id,username,role,active,created_at").order("username").execute().data
+    admins=sb.table("admins").select("id,username,active,created_at").order("username").execute().data
     st.dataframe(pd.DataFrame(admins),use_container_width=True,hide_index=True)
     au=st.text_input("Username ใหม่"); ap=st.text_input("Password ใหม่",type="password")
     if st.button("เพิ่ม Admin"):
         if au.strip() and ap:
-            sb.table("admins").insert({"username":au.strip(),"password_hash":h(ap),"role":"admin","active":True}).execute()
+            sb.table("admins").insert({"username":au.strip(),"password_hash":h(ap),"active":True}).execute()
             st.success("เพิ่ม Admin แล้ว"); st.rerun()
     if admins:
         sel=st.selectbox("เลือก Admin", [x["id"] for x in admins], format_func=lambda x:next(a["username"] for a in admins if a["id"]==x))
