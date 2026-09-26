@@ -86,11 +86,12 @@ def month_days(y,m):
     return [start+timedelta(days=i) for i in range((end-start).days)]
 
 def load_font(size, bold=False):
-    # รองรับ TH Sarabun PSK หากผู้ใช้ใส่ไฟล์ฟอนต์ไว้ในโฟลเดอร์ fonts
+    """Load a Thai font. Latin digits/punctuation are rendered with a fallback font."""
     names = [
-        "THSarabunPSK.ttf" if not bold else "THSarabunPSK-Bold.ttf",
-        "THSarabunNew.ttf" if not bold else "THSarabunNew-Bold.ttf",
-        "NotoSansThai-Regular.ttf" if not bold else "NotoSansThai-Bold.ttf",
+        "THSarabunPSK-Bold.ttf" if bold else "THSarabunPSK.ttf",
+        "THSarabunNew-Bold.ttf" if bold else "THSarabunNew.ttf",
+        "NotoSansThai-Bold.ttf" if bold else "NotoSansThai-Regular.ttf",
+        "NotoSansThaiUI-Bold.ttf" if bold else "NotoSansThaiUI-Regular.ttf",
     ]
     roots = [os.path.join(os.path.dirname(__file__), "fonts"), os.path.dirname(__file__),
              "/usr/share/fonts/truetype/noto"]
@@ -103,6 +104,63 @@ def load_font(size, bold=False):
                 except Exception:
                     pass
     return ImageFont.load_default()
+
+
+def load_latin_font(size, bold=False):
+    """Fallback for Arabic numerals, slash and Latin punctuation."""
+    names = ["DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"]
+    roots = [os.path.join(os.path.dirname(__file__), "fonts"),
+             "/usr/share/fonts/truetype/dejavu"]
+    for root in roots:
+        for name in names:
+            fp=os.path.join(root,name)
+            if os.path.exists(fp):
+                try:
+                    return ImageFont.truetype(fp,size)
+                except Exception:
+                    pass
+    return ImageFont.load_default()
+
+
+def _is_thai_char(ch):
+    return "\u0e00" <= ch <= "\u0e7f"
+
+
+def _font_segments(text):
+    """Group consecutive Thai/non-Thai text so Thai shaping is preserved."""
+    out=[]; cur=""; kind=None
+    for ch in str(text):
+        k=_is_thai_char(ch)
+        if kind is None or k==kind:
+            cur += ch
+        else:
+            out.append((kind,cur)); cur=ch
+        kind=k
+    if cur:
+        out.append((kind,cur))
+    return out
+
+
+def mixed_text_width(draw, text, thai_font, latin_font):
+    return sum(draw.textlength(seg, font=thai_font if is_thai else latin_font)
+               for is_thai, seg in _font_segments(text))
+
+
+def draw_mixed_center(draw, xy, text, thai_font, latin_font, fill="black"):
+    """Draw Thai and Arabic numerals/punctuation with proper Thai shaping."""
+    segments=_font_segments(text)
+    total=sum(draw.textlength(seg, font=thai_font if is_thai else latin_font)
+              for is_thai, seg in segments)
+    x=xy[0]-total/2
+    cy=xy[1]
+    for is_thai, seg in segments:
+        font=thai_font if is_thai else latin_font
+        w=draw.textlength(seg,font=font)
+        asc,desc=font.getmetrics()
+        baseline=cy+(asc-desc)/2
+        draw.text((x,baseline),seg,font=font,fill=fill,anchor="ls")
+        x += w
+
 
 def schedule_matrix(ds):
     if not ds:
@@ -132,8 +190,12 @@ def build_schedule_image(ds, m):
     head_font=load_font(28,True)
     body_font=load_font(27,False)
     small_font=load_font(23,False)
+    title_latin=load_latin_font(46,True)
+    head_latin=load_latin_font(28,True)
+    body_latin=load_latin_font(27,False)
+    small_latin=load_latin_font(23,False)
     title=f"ตารางเวรกลางวัน {month_text(m['year'],m['month'])}"
-    dr.text((40,25),title,fill="black",font=title_font)
+    draw_mixed_center(dr,(W/2,52),title,title_font,title_latin,fill="black")
 
     x0=40; y0=100
     date_w=180; day_w=120; slot_w=(W-x0*2-date_w-day_w)//max_slot
@@ -144,9 +206,7 @@ def build_schedule_image(ds, m):
     x=x0
     for w,hdr in zip(widths,headers):
         dr.rectangle((x,y0,x+w,y0+row_h),outline="black",width=2)
-        bbox=dr.textbbox((0,0),hdr,font=head_font)
-        tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-        dr.text((x+(w-tw)/2,y0+(row_h-th)/2-4),hdr,fill="black",font=head_font)
+        draw_mixed_center(dr,(x+w/2,y0+row_h/2-2),hdr,head_font,head_latin,fill="black")
         x+=w
 
     by={}
@@ -160,16 +220,16 @@ def build_schedule_image(ds, m):
         for idx,(w,val) in enumerate(zip(widths,values)):
             dr.rectangle((x,y,x+w,y+row_h),outline="black",width=1)
             font=small_font if idx>=2 else body_font
-            bbox=dr.textbbox((0,0),str(val),font=font)
-            tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+            latin_font=small_latin if idx>=2 else body_latin
+            tw=mixed_text_width(dr,str(val),font,latin_font)
             if tw>w-16:
                 # ตัดข้อความยาวให้ยังอ่านได้
                 txt=str(val)
-                while len(txt)>3 and dr.textbbox((0,0),txt+"…",font=font)[2]>w-16:
+                while len(txt)>3 and mixed_text_width(dr,txt+"…",font,latin_font)>w-16:
                     txt=txt[:-1]
                 val=txt+"…" if txt!=str(val) else txt
-                bbox=dr.textbbox((0,0),str(val),font=font); tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-            dr.text((x+(w-tw)/2,y+(row_h-th)/2-4),str(val),fill="black",font=font)
+                tw=mixed_text_width(dr,str(val),font,latin_font)
+            draw_mixed_center(dr,(x+w/2,y+row_h/2-2),str(val),font,latin_font,fill="black")
             x+=w
         y+=row_h
     return im
