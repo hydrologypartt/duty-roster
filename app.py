@@ -162,6 +162,40 @@ def draw_mixed_center(draw, xy, text, thai_font, latin_font, fill="black"):
         x += w
 
 
+
+# วันหยุดพิเศษที่ต้องการไฮไลท์ (รูปแบบ YYYY-MM-DD)
+# เพิ่มวันที่ได้ในรายการนี้เมื่อมีวันหยุดพิเศษของหน่วยงาน
+SPECIAL_HOLIDAYS = {
+    "2026-10-16",
+}
+
+def is_special_holiday(d):
+    return d.isoformat() in SPECIAL_HOLIDAYS
+
+def is_highlight_day(d):
+    return d.weekday() >= 5 or is_special_holiday(d)
+
+def schedule_style(df):
+    """สีแดงอ่อนสำหรับเสาร์-อาทิตย์/วันหยุดพิเศษ ในตารางที่แสดงบนเว็บ"""
+    if df.empty:
+        return df
+    styles=[]
+    for _, row in df.iterrows():
+        try:
+            parts=str(row["วันที่"]).split("/")
+            dt=date(int(parts[2])-543, int(parts[1]), int(parts[0]))
+            bg="#FCE4E4" if is_highlight_day(dt) else ""
+        except Exception:
+            bg=""
+        styles.append([f"background-color: {bg};" if bg else "" for _ in df.columns])
+    return pd.DataFrame(styles, index=df.index, columns=df.columns)
+
+def styled_schedule_matrix(ds):
+    df=schedule_matrix(ds)
+    if df.empty:
+        return df
+    return df.style.apply(lambda _: schedule_style(df), axis=None)
+
 def schedule_matrix(ds):
     if not ds:
         return pd.DataFrame()
@@ -217,8 +251,9 @@ def build_schedule_image(ds, m):
         dt=date.fromisoformat(d)
         values=[f"{dt.day:02d}/{dt.month:02d}/{dt.year+543}",SHORT_WD[dt.weekday()]]+[by[d].get(i,"") for i in range(1,max_slot+1)]
         x=x0
+        row_fill="#FCE4E4" if is_highlight_day(dt) else "white"
         for idx,(w,val) in enumerate(zip(widths,values)):
-            dr.rectangle((x,y,x+w,y+row_h),outline="black",width=1)
+            dr.rectangle((x,y,x+w,y+row_h),fill=row_fill,outline="black",width=1)
             font=small_font if idx>=2 else body_font
             latin_font=small_latin if idx>=2 else body_latin
             tw=mixed_text_width(dr,str(val),font,latin_font)
@@ -332,7 +367,8 @@ if not admin():
     st.subheader("📋 ตารางเวรที่ประกาศ")
     ds=duties(mid)
     if ds:
-        st.dataframe(schedule_matrix(ds),use_container_width=True,hide_index=True)
+        st.dataframe(styled_schedule_matrix(ds),use_container_width=True,hide_index=True)
+        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษ")
     else: st.info("ยังไม่มีตารางเวรที่ประกาศ")
     st.stop()
 
@@ -511,7 +547,8 @@ with tabs[4]:
         # Export + Preview
         st.divider(); st.subheader("📤 Export / Preview")
         st.markdown("#### ตารางเวรแนวนอน")
-        st.dataframe(schedule_matrix(ds),use_container_width=True,hide_index=True)
+        st.dataframe(styled_schedule_matrix(ds),use_container_width=True,hide_index=True)
+        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษ")
 
         edf=schedule_matrix(ds)
         # CSV แนวนอนเหมือนตารางประกาศ
