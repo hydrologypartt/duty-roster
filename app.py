@@ -35,7 +35,7 @@ def get_month(mid):
 def team_rule(m):
     return int(m.get("senior_per_day", 2) or 2), int(m.get("newbie_per_day", 2) or 2)
 def people_for(mid):
-    r=sb.table("month_members").select("person_id,people(id,name,phone,active)").eq("month_id",mid).execute().data
+    r=sb.table("month_members").select("person_id,people(id,name,phone,active,member_type)").eq("month_id",mid).execute().data
     return [x["people"] for x in r]
 def unavailable(mid):
     return sb.table("unavailable_days").select("*").eq("month_id",mid).execute().data
