@@ -261,6 +261,67 @@ if not admin():
         st.caption("เลือก/ยกเลิกได้หลายวันโดยหน้าเว็บจะไม่โหลดทุกครั้ง • เลือกเสร็จแล้วกด **💾 บันทึกวันไม่ว่าง** เพียงครั้งเดียว")
         st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
 
+        # ใช้ checkbox ภายใน form เป็นตัวเก็บสถานะ แต่แต่งหน้าตาให้เหมือนปฏิทินปุ่มเดิม
+        st.markdown("""
+        <style>
+        /* ปฏิทิน: คง 7 คอลัมน์และหน้าตาเป็นปุ่มวันที่แบบเดิม */
+        div[data-testid="stForm"] div[data-testid="stCheckbox"] {
+            width: 100%;
+            min-width: 0;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label {
+            width: 100%;
+            min-height: 58px;
+            box-sizing: border-box;
+            border: 1px solid #d9dce3;
+            border-radius: 10px;
+            background: #f7f7f9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 !important;
+            margin: 0 !important;
+            cursor: pointer;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:first-child {
+            display: none !important;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:last-child {
+            width: 100%;
+            text-align: center;
+            font-size: 16px;
+            line-height: 1;
+            color: #222;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"] input:checked + div {
+            background: #eeeaff;
+            border-radius: 10px;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"]:has(input:checked) > label {
+            background: #5b4bdb !important;
+            border-color: #5b4bdb !important;
+        }
+        div[data-testid="stForm"] div[data-testid="stCheckbox"]:has(input:checked) > label > div:last-child {
+            color: white !important;
+            font-weight: 700;
+        }
+        @media (max-width: 640px) {
+            div[data-testid="stForm"] div[data-testid="stCheckbox"] > label {
+                min-height: 44px;
+                border-radius: 7px;
+            }
+            div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:last-child {
+                font-size: 14px;
+            }
+            div[data-testid="stForm"] div[data-testid="stHorizontalBlock"] {
+                gap: 0.25rem !important;
+            }
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
         # ใช้ st.form เพื่อไม่ให้ Streamlit rerun เมื่อคลิกแต่ละวัน
         # ค่าทั้งหมดจะถูกส่งกลับมาพร้อมกันเมื่อกดปุ่มบันทึกเท่านั้น
         with st.form(key=f"unavailable_form_{mid}_{pid}", clear_on_submit=False):
