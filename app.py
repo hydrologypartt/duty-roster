@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from collections import defaultdict
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client
 
@@ -15,6 +16,9 @@ if not URL or not KEY:
     st.error("ยังไม่ได้ตั้งค่า SUPABASE_URL และ SUPABASE_KEY")
     st.stop()
 sb = create_client(URL, KEY)
+
+CALENDAR_DIR = os.path.join(os.path.dirname(__file__), "calendar_component")
+calendar_picker = components.declare_component("unavailable_calendar", path=CALENDAR_DIR)
 
 MONTHS = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน",
           "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"]
@@ -261,112 +265,30 @@ if not admin():
         st.caption("เลือก/ยกเลิกได้หลายวันโดยหน้าเว็บจะไม่โหลดทุกครั้ง • เลือกเสร็จแล้วกด **💾 บันทึกวันไม่ว่าง** เพียงครั้งเดียว")
         st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
 
-        # ใช้ checkbox ภายใน form เป็นตัวเก็บสถานะ แต่แต่งหน้าตาให้เหมือนปฏิทินปุ่มเดิม
-        st.markdown("""
-        <style>
-        /* ปฏิทิน: คง 7 คอลัมน์และหน้าตาเป็นปุ่มวันที่แบบเดิม */
-        div[data-testid="stForm"] div[data-testid="stCheckbox"] {
-            width: 100%;
-            min-width: 0;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label {
-            width: 100%;
-            min-height: 58px;
-            box-sizing: border-box;
-            border: 1px solid #d9dce3;
-            border-radius: 10px;
-            background: #f7f7f9;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0 !important;
-            margin: 0 !important;
-            cursor: pointer;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:first-child {
-            display: none !important;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:last-child {
-            width: 100%;
-            text-align: center;
-            font-size: 16px;
-            line-height: 1;
-            color: #222;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"] input:checked + div {
-            background: #eeeaff;
-            border-radius: 10px;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"]:has(input:checked) > label {
-            background: #5b4bdb !important;
-            border-color: #5b4bdb !important;
-        }
-        div[data-testid="stForm"] div[data-testid="stCheckbox"]:has(input:checked) > label > div:last-child {
-            color: white !important;
-            font-weight: 700;
-        }
-        @media (max-width: 640px) {
-            div[data-testid="stForm"] div[data-testid="stCheckbox"] > label {
-                min-height: 44px;
-                border-radius: 7px;
-            }
-            div[data-testid="stForm"] div[data-testid="stCheckbox"] > label > div:last-child {
-                font-size: 14px;
-            }
-            div[data-testid="stForm"] div[data-testid="stHorizontalBlock"] {
-                gap: 0.25rem !important;
-            }
-        }
-        </style>
-        """, unsafe_allow_html=True)
+        # ปฏิทินแบบเดิม: กดเลขวันที่โดยตรง และเก็บสถานะไว้ใน browser
+        # จนกว่าจะกดปุ่มบันทึก จึงค่อยส่งค่ากลับมาให้ Streamlit 1 ครั้ง
+        selected = calendar_picker(
+            year=m["year"],
+            month=m["month"],
+            selected=sorted(current),
+            holidays=holiday_map(mid),
+            key=f"calendar_{mid}_{pid}"
+        )
 
-        # ใช้ st.form เพื่อไม่ให้ Streamlit rerun เมื่อคลิกแต่ละวัน
-        # ค่าทั้งหมดจะถูกส่งกลับมาพร้อมกันเมื่อกดปุ่มบันทึกเท่านั้น
-        with st.form(key=f"unavailable_form_{mid}_{pid}", clear_on_submit=False):
-            head=st.columns(7)
-            for i,c in enumerate(head):
-                c.markdown(f"**{SHORT_WD[i]}**")
+        if selected is not None:
+            chosen = [d for d in days if d.isoformat() in set(selected)]
+            if used >= max_edits:
+                st.warning("คุณใช้สิทธิ์แก้ไขครบแล้ว")
+            else:
+                sb.table("unavailable_days").delete().eq("month_id",mid).eq("person_id",pid).execute()
+                if chosen:
+                    sb.table("unavailable_days").insert([
+                        {"month_id":mid,"person_id":pid,"unavailable_date":d.isoformat(),"edit_no":used+1} for d in chosen
+                    ]).execute()
+                log("member_update_unavailable",mid,pid,{"edit_no":used+1,"dates":[d.isoformat() for d in chosen]})
+                st.success(f"บันทึกแล้ว {len(chosen)} วัน")
+                st.rerun()
 
-            first=date(m["year"],m["month"],1).weekday()
-            cells=[None]*first+days
-            submitted_values={}
-            for start in range(0,len(cells),7):
-                week=cells[start:start+7]
-                cols=st.columns(7)
-                for i,d in enumerate(week):
-                    if d is None:
-                        cols[i].write("")
-                        continue
-                    iso=d.isoformat()
-                    # checkbox เป็น widget ของ form จึงไม่ rerun เมื่อกดเลือก
-                    submitted_values[iso]=cols[i].checkbox(
-                        f"{d.day}",
-                        value=(iso in current),
-                        key=f"unavail_{mid}_{pid}_{iso}"
-                    )
-
-            chosen=[d for d in days if submitted_values.get(d.isoformat(),False)]
-            st.caption(f"เลือกไว้จากข้อมูลเดิม {len([d for d in days if d.isoformat() in current])} วัน • เมื่อกดบันทึก ระบบจะบันทึกชุดใหม่ทั้งหมดครั้งเดียว")
-            save_clicked=st.form_submit_button(
-                "💾 บันทึกวันไม่ว่าง",
-                type="primary",
-                use_container_width=True,
-                disabled=(used>=max_edits)
-            )
-
-        if used>=max_edits:
-            st.warning("คุณใช้สิทธิ์แก้ไขครบแล้ว")
-        if save_clicked:
-            sb.table("unavailable_days").delete().eq("month_id",mid).eq("person_id",pid).execute()
-            if chosen:
-                sb.table("unavailable_days").insert([
-                    {"month_id":mid,"person_id":pid,"unavailable_date":d.isoformat(),"edit_no":used+1} for d in chosen
-                ]).execute()
-            log("member_update_unavailable",mid,pid,{"edit_no":used+1,"dates":[d.isoformat() for d in chosen]})
-            st.success(f"บันทึกแล้ว {len(chosen)} วัน")
-            st.rerun()
     else:
         st.warning("ปิดรับวันไม่ว่างแล้ว หากต้องการแก้ไขให้ติดต่อ Admin")
         st.write("วันที่แจ้งไว้:", ", ".join(sorted(current)) if current else "ไม่มี")

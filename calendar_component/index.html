@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box} body{margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;background:transparent;color:#222}
+.wrap{width:100%;max-width:100%;padding:2px 0 8px}.wd,.grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}.wd{margin-bottom:6px}.wd div{text-align:center;font-weight:700;font-size:14px;padding:4px 0}.day{border:1px solid #d9dce3;border-radius:10px;background:#f7f7f9;min-height:54px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;transition:.08s;user-select:none}.day:hover{border-color:#5b4bdb}.day.empty{visibility:hidden;cursor:default}.day.weekend,.day.holiday{background:#fde2e2}.day.selected{background:#5b4bdb;color:#fff;border-color:#5b4bdb;font-weight:700}.legend{font-size:13px;color:#666;margin:8px 0}.actions{display:flex;gap:8px;margin-top:8px}.save{border:0;border-radius:8px;background:#5b4bdb;color:white;font-weight:700;padding:10px 18px;cursor:pointer;width:100%;font-size:16px}.save:active{transform:scale(.99)}
+@media(max-width:640px){.wd,.grid{gap:3px}.day{min-height:43px;border-radius:7px;font-size:14px}.wd div{font-size:12px}.save{font-size:15px;padding:9px}.legend{font-size:11px}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="wd" id="wd"></div><div class="grid" id="grid"></div><div class="legend">คลิกวันที่เพื่อเลือก/ยกเลิก • 🟥 เสาร์–อาทิตย์/วันหยุดพิเศษ • เลือกเสร็จแล้วกด “บันทึกวันไม่ว่าง”</div><div class="actions"><button class="save" id="save">💾 บันทึกวันไม่ว่าง</button></div></div>
+<script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/index.js"></script>
+<script>
+const args = window.frameElement && window.frameElement.getAttribute('data-args');
+// Streamlit component-lib exposes the args through its event; use the standard render event.
+let cfg=null, selected=new Set();
+function render(){
+ if(!cfg)return;
+ const wd=['จ.','อ.','พ.','พฤ.','ศ.','ส.','อา.'];
+ document.getElementById('wd').innerHTML=wd.map(x=>`<div>${x}</div>`).join('');
+ const y=Number(cfg.year), m=Number(cfg.month); const first=new Date(y,m-1,1).getDay(); const offset=(first+6)%7;
+ const days=new Date(y,m,0).getDate(); const holidays=cfg.holidays||{};
+ let html=''; for(let i=0;i<offset;i++) html+='<div class="day empty"></div>';
+ for(let d=1;d<=days;d++){
+   const dt=new Date(y,m-1,d); const iso=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`; const dow=(dt.getDay()+6)%7;
+   const red=dow>=5 || Object.prototype.hasOwnProperty.call(holidays,iso);
+   const sel=selected.has(iso);
+   html+=`<div class="day ${red?'weekend':''} ${sel?'selected':''}" data-iso="${iso}" title="${holidays[iso]||''}">${d}</div>`;
+ }
+ document.getElementById('grid').innerHTML=html;
+ document.querySelectorAll('.day[data-iso]').forEach(el=>el.addEventListener('click',()=>{const iso=el.dataset.iso;if(selected.has(iso))selected.delete(iso);else selected.add(iso);render();}));
+ if(window.Streamlit) Streamlit.setFrameHeight(document.body.scrollHeight+4);
+}
+function init(){
+ if(!window.Streamlit){setTimeout(init,50);return;}
+ Streamlit.setComponentReady(); Streamlit.setFrameHeight(120);
+ Streamlit.events.addEventListener(Streamlit.RENDER_EVENT,(event)=>{cfg=event.detail.args||{};selected=new Set(cfg.selected||[]);render();});
+ document.getElementById('save').addEventListener('click',()=>{Streamlit.setComponentValue(Array.from(selected).sort());});
+}
+init();
+</script>
+</body></html>
