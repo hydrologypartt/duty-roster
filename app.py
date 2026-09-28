@@ -9,40 +9,6 @@ from supabase import create_client
 
 st.set_page_config(page_title="ระบบจัดเวรออนไลน์", page_icon="📅", layout="wide")
 
-# บังคับทุกกลุ่ม st.columns ให้คงเป็นแถวเดียว โดยเฉพาะปฏิทิน 7 คอลัมน์บนมือถือ
-st.markdown("""
-<style>
-/* Streamlit อาจ wrap columns เป็นแนวตั้งบนจอแคบ จึงบังคับให้ 7 ช่องของปฏิทินอยู่แถวเดียว */
-div[data-testid="stHorizontalBlock"] {
-    flex-wrap: nowrap !important;
-    gap: 0.25rem !important;
-    width: 100% !important;
-}
-div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
-    min-width: 0 !important;
-    width: 0 !important;
-    flex: 1 1 0 !important;
-}
-div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] button {
-    width: 100% !important;
-    min-width: 0 !important;
-    min-height: 48px !important;
-    padding: 0.2rem 0.05rem !important;
-    font-size: clamp(0.72rem, 2.7vw, 1rem) !important;
-    white-space: nowrap !important;
-}
-@media (max-width: 480px) {
-    div[data-testid="stHorizontalBlock"] {
-        gap: 0.12rem !important;
-    }
-    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] button {
-        min-height: 42px !important;
-        border-radius: 6px !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
 URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
 KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
 if not URL or not KEY:
@@ -85,116 +51,86 @@ def month_days(y,m):
     end=date(y+1,1,1) if m==12 else date(y,m+1,1)
     return [start+timedelta(days=i) for i in range((end-start).days)]
 
-def load_font(size, bold=False):
-    """Load a Thai font. Latin digits/punctuation are rendered with a fallback font."""
-    names = [
-        "THSarabunPSK-Bold.ttf" if bold else "THSarabunPSK.ttf",
-        "THSarabunNew-Bold.ttf" if bold else "THSarabunNew.ttf",
-        "NotoSansThai-Bold.ttf" if bold else "NotoSansThai-Regular.ttf",
-        "NotoSansThaiUI-Bold.ttf" if bold else "NotoSansThaiUI-Regular.ttf",
-    ]
+def special_holidays(mid):
+    try:
+        return sb.table("special_holidays").select("*").eq("month_id",mid).order("holiday_date").execute().data
+    except Exception:
+        return []
+
+def holiday_map(mid):
+    return {x["holiday_date"]: (x.get("holiday_name") or "วันหยุดพิเศษ") for x in special_holidays(mid)}
+
+def is_red_day(dt, hmap):
+    return dt.weekday() >= 5 or dt.isoformat() in hmap
+
+def style_schedule_df(df, hmap):
+    if df.empty:
+        return df
+    def row_style(row):
+        try:
+            parts=str(row.get("วันที่","")).split("/")
+            if len(parts)==3:
+                dt=date(int(parts[2])-543,int(parts[1]),int(parts[0]))
+                if is_red_day(dt,hmap):
+                    return ["background-color: #fde2e2"] * len(row)
+        except Exception:
+            pass
+        return [""] * len(row)
+    return df.style.apply(row_style, axis=1)
+
+def _font_path(names):
     roots = [os.path.join(os.path.dirname(__file__), "fonts"), os.path.dirname(__file__),
              "/usr/share/fonts/truetype/noto"]
     for root in roots:
         for name in names:
             fp=os.path.join(root,name)
             if os.path.exists(fp):
-                try:
-                    return ImageFont.truetype(fp,size)
-                except Exception:
-                    pass
-    return ImageFont.load_default()
+                return fp
+    return None
 
+def load_font(size, bold=False):
+    names = [
+        "THSarabunPSK.ttf" if not bold else "THSarabunPSK-Bold.ttf",
+        "THSarabunNew.ttf" if not bold else "THSarabunNew-Bold.ttf",
+        "NotoSansThai-Regular.ttf" if not bold else "NotoSansThai-Bold.ttf",
+    ]
+    fp=_font_path(names)
+    if fp:
+        try: return ImageFont.truetype(fp,size)
+        except Exception: pass
+    return ImageFont.load_default()
 
 def load_latin_font(size, bold=False):
-    """Fallback for Arabic numerals, slash and Latin punctuation."""
-    names = ["DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"]
-    roots = [os.path.join(os.path.dirname(__file__), "fonts"),
-             "/usr/share/fonts/truetype/dejavu"]
-    for root in roots:
-        for name in names:
-            fp=os.path.join(root,name)
-            if os.path.exists(fp):
-                try:
-                    return ImageFont.truetype(fp,size)
-                except Exception:
-                    pass
+    names=["DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf", "Arial.ttf"]
+    fp=_font_path(names)
+    if fp:
+        try: return ImageFont.truetype(fp,size)
+        except Exception: pass
     return ImageFont.load_default()
 
-
-def _is_thai_char(ch):
-    return "\u0e00" <= ch <= "\u0e7f"
-
-
-def _font_segments(text):
-    """Group consecutive Thai/non-Thai text so Thai shaping is preserved."""
-    out=[]; cur=""; kind=None
+def draw_mixed_centered(dr, xy, text, width, row_h, thai_font, latin_font, fill="black"):
+    # ใช้ฟอนต์ไทยสำหรับไทย และ DejaVu สำหรับตัวเลข/อังกฤษ/เครื่องหมายที่ NotoSansThai ไม่มี glyph
+    runs=[]
+    cur_font=None; cur=[]
     for ch in str(text):
-        k=_is_thai_char(ch)
-        if kind is None or k==kind:
-            cur += ch
-        else:
-            out.append((kind,cur)); cur=ch
-        kind=k
-    if cur:
-        out.append((kind,cur))
-    return out
-
-
-def mixed_text_width(draw, text, thai_font, latin_font):
-    return sum(draw.textlength(seg, font=thai_font if is_thai else latin_font)
-               for is_thai, seg in _font_segments(text))
-
-
-def draw_mixed_center(draw, xy, text, thai_font, latin_font, fill="black"):
-    """Draw Thai and Arabic numerals/punctuation with proper Thai shaping."""
-    segments=_font_segments(text)
-    total=sum(draw.textlength(seg, font=thai_font if is_thai else latin_font)
-              for is_thai, seg in segments)
-    x=xy[0]-total/2
-    cy=xy[1]
-    for is_thai, seg in segments:
-        font=thai_font if is_thai else latin_font
-        w=draw.textlength(seg,font=font)
-        asc,desc=font.getmetrics()
-        baseline=cy+(asc-desc)/2
-        draw.text((x,baseline),seg,font=font,fill=fill,anchor="ls")
-        x += w
-
-
-
-# วันหยุดพิเศษที่ต้องการไฮไลท์ (รูปแบบ YYYY-MM-DD)
-# เพิ่มวันที่ได้ในรายการนี้เมื่อมีวันหยุดพิเศษของหน่วยงาน
-SPECIAL_HOLIDAYS = {
-    "2026-10-16",
-}
-
-def is_special_holiday(d):
-    return d.isoformat() in SPECIAL_HOLIDAYS
-
-def is_highlight_day(d):
-    return d.weekday() >= 5 or is_special_holiday(d)
-
-def schedule_style(df):
-    """สีแดงอ่อนสำหรับเสาร์-อาทิตย์/วันหยุดพิเศษ ในตารางที่แสดงบนเว็บ"""
-    if df.empty:
-        return df
-    styles=[]
-    for _, row in df.iterrows():
-        try:
-            parts=str(row["วันที่"]).split("/")
-            dt=date(int(parts[2])-543, int(parts[1]), int(parts[0]))
-            bg="#FCE4E4" if is_highlight_day(dt) else ""
-        except Exception:
-            bg=""
-        styles.append([f"background-color: {bg};" if bg else "" for _ in df.columns])
-    return pd.DataFrame(styles, index=df.index, columns=df.columns)
-
-def styled_schedule_matrix(ds):
-    df=schedule_matrix(ds)
-    if df.empty:
-        return df
-    return df.style.apply(lambda _: schedule_style(df), axis=None)
+        is_latin = ch.isascii()
+        font = latin_font if is_latin else thai_font
+        if font != cur_font and cur:
+            runs.append(("".join(cur),cur_font))
+            cur=[]
+        cur_font=font; cur.append(ch)
+    if cur: runs.append(("".join(cur),cur_font))
+    total=0
+    heights=[]
+    for txt,font in runs:
+        bb=dr.textbbox((0,0),txt,font=font); total += bb[2]-bb[0]; heights.append(bb)
+    x=xy[0]+(width-total)/2
+    # baseline alignment by using the maximum top/bottom box around the row center
+    all_top=min((bb[1] for bb in heights), default=0); all_bottom=max((bb[3] for bb in heights), default=0)
+    y=xy[1]+(row_h-(all_bottom-all_top))/2-all_top-2
+    for (txt,font),bb in zip(runs,heights):
+        dr.text((x,y),txt,fill=fill,font=font)
+        x += bb[2]-bb[0]
 
 def schedule_matrix(ds):
     if not ds:
@@ -229,7 +165,7 @@ def build_schedule_image(ds, m):
     body_latin=load_latin_font(27,False)
     small_latin=load_latin_font(23,False)
     title=f"ตารางเวรกลางวัน {month_text(m['year'],m['month'])}"
-    draw_mixed_center(dr,(W/2,52),title,title_font,title_latin,fill="black")
+    draw_mixed_centered(dr,(40,25),title,W-80,55,title_font,title_latin)
 
     x0=40; y0=100
     date_w=180; day_w=120; slot_w=(W-x0*2-date_w-day_w)//max_slot
@@ -240,31 +176,34 @@ def build_schedule_image(ds, m):
     x=x0
     for w,hdr in zip(widths,headers):
         dr.rectangle((x,y0,x+w,y0+row_h),outline="black",width=2)
-        draw_mixed_center(dr,(x+w/2,y0+row_h/2-2),hdr,head_font,head_latin,fill="black")
+        draw_mixed_centered(dr,(x,y0),hdr,w,row_h,head_font,head_latin)
         x+=w
 
     by={}
     for item in ds:
         by.setdefault(item["duty_date"],{})[int(item.get("slot",1))]=item.get("people",{}).get("name","")
+    hmap=holiday_map(m["id"])
     y=y0+row_h
     for d in rows:
         dt=date.fromisoformat(d)
         values=[f"{dt.day:02d}/{dt.month:02d}/{dt.year+543}",SHORT_WD[dt.weekday()]]+[by[d].get(i,"") for i in range(1,max_slot+1)]
         x=x0
-        row_fill="#FCE4E4" if is_highlight_day(dt) else "white"
+        row_fill="#fde2e2" if is_red_day(dt,hmap) else "white"
         for idx,(w,val) in enumerate(zip(widths,values)):
             dr.rectangle((x,y,x+w,y+row_h),fill=row_fill,outline="black",width=1)
-            font=small_font if idx>=2 else body_font
+            thai_font=small_font if idx>=2 else body_font
             latin_font=small_latin if idx>=2 else body_latin
-            tw=mixed_text_width(dr,str(val),font,latin_font)
-            if tw>w-16:
-                # ตัดข้อความยาวให้ยังอ่านได้
-                txt=str(val)
-                while len(txt)>3 and mixed_text_width(dr,txt+"…",font,latin_font)>w-16:
-                    txt=txt[:-1]
-                val=txt+"…" if txt!=str(val) else txt
-                tw=mixed_text_width(dr,str(val),font,latin_font)
-            draw_mixed_center(dr,(x+w/2,y+row_h/2-2),str(val),font,latin_font,fill="black")
+            # ตัดข้อความชื่อยาวโดยคำนวณด้วยฟอนต์ไทย
+            txt=str(val)
+            while len(txt)>3:
+                total_w=0
+                for ch in txt:
+                    f=latin_font if ch.isascii() else thai_font
+                    bb=dr.textbbox((0,0),ch,font=f); total_w += bb[2]-bb[0]
+                if total_w <= w-16: break
+                txt=txt[:-1]
+            if txt != str(val): txt += "…"
+            draw_mixed_centered(dr,(x,y),txt,w,row_h,thai_font,latin_font)
             x+=w
         y+=row_h
     return im
@@ -367,8 +306,7 @@ if not admin():
     st.subheader("📋 ตารางเวรที่ประกาศ")
     ds=duties(mid)
     if ds:
-        st.dataframe(styled_schedule_matrix(ds),use_container_width=True,hide_index=True)
-        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษ")
+        st.dataframe(style_schedule_df(schedule_matrix(ds), holiday_map(mid)),use_container_width=True,hide_index=True)
     else: st.info("ยังไม่มีตารางเวรที่ประกาศ")
     st.stop()
 
@@ -376,7 +314,7 @@ if not admin():
 # Admin
 # =========================
 st.header("🛠 Admin Dashboard")
-tabs=st.tabs(["📊 ภาพรวม","📅 จัดการเดือน","👥 สมาชิก","🚫 วันไม่ว่าง","🤖 จัดเวร","💰 ค่าเวร","📜 ประวัติ","👑 Admin"])
+tabs=st.tabs(["📊 ภาพรวม","📅 จัดการเดือน","👥 สมาชิก","🚫 วันไม่ว่าง","🤖 จัดเวร","💰 ค่าเวร","📜 ประวัติ","👑 Admin","🎉 วันหยุด"])
 
 m = None
 
@@ -547,8 +485,8 @@ with tabs[4]:
         # Export + Preview
         st.divider(); st.subheader("📤 Export / Preview")
         st.markdown("#### ตารางเวรแนวนอน")
-        st.dataframe(styled_schedule_matrix(ds),use_container_width=True,hide_index=True)
-        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษ")
+        st.caption("🟥 สีแดงอ่อน = วันเสาร์–อาทิตย์ หรือวันหยุดพิเศษที่ Admin กำหนด")
+        st.dataframe(style_schedule_df(schedule_matrix(ds), holiday_map(mid)),use_container_width=True,hide_index=True)
 
         edf=schedule_matrix(ds)
         # CSV แนวนอนเหมือนตารางประกาศ
@@ -584,10 +522,13 @@ with tabs[5]:
     ds=duties(mid)
     if ds:
         sums=defaultdict(lambda:{"วันธรรมดา":0,"เสาร์-อาทิตย์":0,"วันหยุด":0,"รวม":0})
+        hmap=holiday_map(mid)
         for x in ds:
-            d=date.fromisoformat(x["duty_date"]); typ="weekend" if d.weekday()>=5 else "weekday"
-            nm=x["people"]["name"]; val=we if typ=="weekend" else wd
-            sums[nm]["เสาร์-อาทิตย์" if typ=="weekend" else "วันธรรมดา"]+=val; sums[nm]["รวม"]+=val
+            d=date.fromisoformat(x["duty_date"])
+            if d.isoformat() in hmap: typ="holiday"; val=hd; key="วันหยุด"
+            elif d.weekday()>=5: typ="weekend"; val=we; key="เสาร์-อาทิตย์"
+            else: typ="weekday"; val=wd; key="วันธรรมดา"
+            nm=x["people"]["name"]; sums[nm][key]+=val; sums[nm]["รวม"]+=val
         st.dataframe(pd.DataFrame([{"ชื่อ":k,**v} for k,v in sums.items()]),use_container_width=True,hide_index=True)
 
 with tabs[6]:
@@ -610,3 +551,55 @@ with tabs[7]:
         if st.button("ปิดการใช้งาน Admin"):
             sb.table("admins").update({"active":False}).eq("id",sel).execute()
             st.success("ปิดการใช้งานแล้ว"); st.rerun()
+
+with tabs[8]:
+    if not m: st.stop()
+    st.subheader("🎉 จัดการวันหยุดพิเศษ")
+    st.info("เสาร์–อาทิตย์จะถูกไฮไลท์อัตโนมัติ ส่วนวันหยุดพิเศษด้านล่าง Admin สามารถเพิ่ม แก้ไข หรือลบได้เอง เพื่อป้องกันวันที่ในระบบคลาดเคลื่อน")
+
+    hs=special_holidays(mid)
+    if hs:
+        st.markdown("#### วันหยุดพิเศษที่ตั้งไว้")
+        for item in hs:
+            c1,c2,c3=st.columns([2,4,1])
+            dt=date.fromisoformat(item["holiday_date"])
+            c1.write(dt.strftime("%d/%m/%Y"))
+            c2.write(item.get("holiday_name") or "วันหยุดพิเศษ")
+            if c3.button("🗑️",key=f"del_holiday_{item['id']}"):
+                sb.table("special_holidays").delete().eq("id",item["id"]).execute()
+                log("delete_special_holiday",mid,details={"holiday_date":item["holiday_date"]})
+                st.success("ลบวันหยุดแล้ว"); st.rerun()
+    else:
+        st.caption("ยังไม่ได้กำหนดวันหยุดพิเศษสำหรับเดือนนี้")
+
+    st.divider()
+    st.markdown("#### ➕ เพิ่มวันหยุดพิเศษ")
+    hd=st.date_input("วันที่",date(m["year"],m["month"],1),key=f"new_holiday_date_{mid}")
+    hn=st.text_input("ชื่อวันหยุด",placeholder="เช่น วันหยุดราชการ / วันหยุดพิเศษ",key=f"new_holiday_name_{mid}")
+    if st.button("➕ เพิ่มวันหยุด",type="primary"):
+        if hd.year != m["year"] or hd.month != m["month"]:
+            st.error("กรุณาเลือกวันที่ให้อยู่ในเดือนที่กำลังจัดการ")
+        elif any(x["holiday_date"]==hd.isoformat() for x in hs):
+            st.error("วันที่นี้มีอยู่แล้ว")
+        else:
+            sb.table("special_holidays").insert({
+                "month_id":mid,"holiday_date":hd.isoformat(),
+                "holiday_name":hn.strip() or "วันหยุดพิเศษ"
+            }).execute()
+            log("add_special_holiday",mid,details={"holiday_date":hd.isoformat(),"holiday_name":hn.strip()})
+            st.success("เพิ่มวันหยุดแล้ว"); st.rerun()
+
+    if hs:
+        st.divider()
+        st.markdown("#### ✏️ แก้ไขวันหยุดพิเศษ")
+        edit_id=st.selectbox("เลือกวันหยุด",[x["id"] for x in hs],format_func=lambda x: next(f"{y['holiday_date']} — {y.get('holiday_name') or 'วันหยุดพิเศษ'}" for y in hs if y["id"]==x),key=f"edit_holiday_{mid}")
+        erow=next(x for x in hs if x["id"]==edit_id)
+        e_date=st.date_input("วันที่ใหม่",date.fromisoformat(erow["holiday_date"]),key=f"edit_holiday_date_{mid}")
+        e_name=st.text_input("ชื่อใหม่",erow.get("holiday_name") or "วันหยุดพิเศษ",key=f"edit_holiday_name_{mid}")
+        if st.button("💾 บันทึกการแก้ไขวันหยุด"):
+            if e_date.year != m["year"] or e_date.month != m["month"]:
+                st.error("วันที่ต้องอยู่ในเดือนที่กำลังจัดการ")
+            else:
+                sb.table("special_holidays").update({"holiday_date":e_date.isoformat(),"holiday_name":e_name.strip() or "วันหยุดพิเศษ"}).eq("id",edit_id).execute()
+                log("update_special_holiday",mid,details={"holiday_date":e_date.isoformat(),"holiday_name":e_name.strip()})
+                st.success("แก้ไขวันหยุดแล้ว"); st.rerun()
