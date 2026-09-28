@@ -31,9 +31,6 @@ def admin(): return st.session_state.get("admin")
 def get_month(mid):
     r=sb.table("duty_months").select("*").eq("id",mid).execute().data
     return r[0] if r else None
-
-def team_rule(m):
-    return int(m.get("senior_per_day", 2) or 2), int(m.get("newbie_per_day", 2) or 2)
 def people_for(mid):
     r=sb.table("month_members").select("person_id,people(id,name,phone,active)").eq("month_id",mid).execute().data
     return [x["people"] for x in r]
@@ -370,33 +367,20 @@ with tabs[2]:
     allp=sb.table("people").select("*").eq("active",True).order("name").execute().data
     active={p["id"] for p in ps}
     st.subheader("รายชื่อที่นำมาจัดเวรเดือนนี้")
-    st.caption("กำหนดประเภทสมาชิกเพื่อให้ Algorithm จัดทีม พี่ + น้องใหม่ ได้ตามสัดส่วน")
     for p in allp:
-        c1,c2,c3,c4=st.columns([3,2,2,2])
-        c1.write(p["name"])
-        c2.write(p.get("phone") or "-")
-        ptype=p.get("member_type") or "พี่"
-        typ=c3.selectbox("ประเภท",["พี่","น้องใหม่"],index=0 if ptype=="พี่" else 1,key=f"ptype_{p['id']}",label_visibility="collapsed")
-        with c4:
-            checked=p["id"] in active
-            val=st.checkbox("นำมาจัด",checked,key=f"mm_{mid}_{p['id']}")
-        if typ != ptype:
-            try:
-                sb.table("people").update({"member_type":typ}).eq("id",p["id"]).execute()
-                st.rerun()
-            except Exception as e:
-                st.error(f"บันทึกประเภทสมาชิกไม่ได้: {e}")
+        c1,c2,c3=st.columns([4,3,2]); c1.write(p["name"]); c2.write(p.get("phone") or "-")
+        checked=p["id"] in active
+        val=c3.checkbox("นำมาจัด",checked,key=f"mm_{mid}_{p['id']}")
         if val and not checked: sb.table("month_members").insert({"month_id":mid,"person_id":p["id"]}).execute(); st.rerun()
         if not val and checked: sb.table("month_members").delete().eq("month_id",mid).eq("person_id",p["id"]).execute(); st.rerun()
     st.divider()
     st.subheader("เพิ่มสมาชิกเข้าฐานข้อมูลถาวร")
     n=st.text_input("ชื่อ-นามสกุล",key="newname"); ph=st.text_input("เบอร์โทร",key="newphone")
-    nt=st.selectbox("ประเภทสมาชิก",["พี่","น้องใหม่"],key="newtype")
     if st.button("เพิ่มสมาชิก"):
         if not n.strip(): st.error("กรุณาใส่ชื่อ")
         else:
             try:
-                sb.table("people").insert({"name":n.strip(),"phone":ph.strip(),"member_type":nt,"active":True}).execute()
+                sb.table("people").insert({"name":n.strip(),"phone":ph.strip(),"active":True}).execute()
                 st.success("เพิ่มสมาชิกแล้ว"); st.rerun()
             except Exception as e: st.error("ชื่ออาจซ้ำหรือข้อมูลไม่ถูกต้อง")
 
@@ -428,27 +412,10 @@ with tabs[4]:
     for i,col in enumerate(cols): newwc[str(i)]=col.number_input(SHORT_WD[i],1,20,int(wc.get(str(i),3)),key=f"wc{i}")
     if st.button("บันทึกจำนวนคนต่อวัน"): sb.table("duty_months").update({"weekday_counts":newwc}).eq("id",mid).execute(); log("update_staffing",mid,details=newwc); st.success("บันทึกแล้ว"); st.rerun()
 
-    senior_need, newbie_need = team_rule(m)
-    st.subheader("👥 เงื่อนไขทีมต่อวัน")
-    rc1,rc2,rc3=st.columns(3)
-    with rc1:
-        senior_need_new=st.number_input("พี่ / คนมีประสบการณ์",0,20,senior_need,key="senior_need")
-    with rc2:
-        newbie_need_new=st.number_input("น้องใหม่",0,20,newbie_need,key="newbie_need")
-    with rc3:
-        st.info(f"ค่าเริ่มต้น: **พี่ {senior_need} + น้องใหม่ {newbie_need}**")
-    if senior_need_new != senior_need or newbie_need_new != newbie_need:
-        if st.button("บันทึกเงื่อนไขทีม"):
-            sb.table("duty_months").update({"senior_per_day":int(senior_need_new),"newbie_per_day":int(newbie_need_new)}).eq("id",mid).execute()
-            log("update_team_rule",mid,details={"senior_per_day":int(senior_need_new),"newbie_per_day":int(newbie_need_new)})
-            st.success("บันทึกเงื่อนไขทีมแล้ว"); st.rerun()
-    st.caption("ถ้าวันใดกำหนด 4 คน ระบบจะบังคับให้เป็น พี่ 2 คน + น้องใหม่ 2 คน ตามค่าที่ตั้งไว้")
-
     st.subheader("🤖 จัดเวรอัตโนมัติ")
     if st.button("จัดเวรอัตโนมัติ",type="primary"):
         un={(x["person_id"],x["unavailable_date"]) for x in unavailable(mid)}
-        ptype={p["id"]:(p.get("member_type") or "พี่") for p in ps}
-        # Hard team-composition constraints + fairness balancing.
+        # Greedy balancing with hard constraints + fairness terms.
         total=defaultdict(int); wknd=defaultdict(int); last=defaultdict(list); chosen_rows=[]; failures=[]
         for d in days:
             need=int(newwc[str(d.weekday())])
@@ -457,31 +424,20 @@ with tabs[4]:
                 consecutive=1 if last[pid] and (d-last[pid][-1]).days==1 else 0
                 gap_penalty=1 if last[pid] and (d-last[pid][-1]).days==2 else 0
                 return (total[pid]*100 + wknd[pid]*12 + consecutive*30 + gap_penalty*5, total[pid])
-            seniors=sorted([pid for pid in eligible if ptype.get(pid)=="พี่"],key=score)
-            newbies=sorted([pid for pid in eligible if ptype.get(pid)=="น้องใหม่"],key=score)
-            required_team=senior_need+newbie_need
-            if need < required_team:
-                failures.append((d.isoformat(),need,senior_need,newbie_need,len(seniors),len(newbies),"จำนวนคนต่อวันน้อยกว่าสัดส่วนที่กำหนด"))
-                continue
-            if len(seniors)<senior_need or len(newbies)<newbie_need:
-                failures.append((d.isoformat(),need,senior_need,newbie_need,len(seniors),len(newbies),"พี่หรือน้องใหม่ที่ว่างไม่พอ"))
-                continue
-            selected=seniors[:senior_need]+newbies[:newbie_need]
-            remaining=[pid for pid in eligible if pid not in set(selected)]
-            remaining.sort(key=score)
-            selected += remaining[:need-required_team]
-            for slot,pid in enumerate(selected,1):
+            eligible.sort(key=score)
+            if len(eligible)<need: failures.append((d.isoformat(),need,len(eligible))); continue
+            for slot,pid in enumerate(eligible[:need],1):
                 chosen_rows.append({"month_id":mid,"duty_date":d.isoformat(),"slot":slot,"person_id":pid})
                 total[pid]+=1; wknd[pid]+=d.weekday()>=5; last[pid].append(d)
         if failures:
-            st.error("จัดเวรไม่ได้ตามเงื่อนไขทีมในบางวัน — ระบบยังไม่เขียนทับตารางเดิม")
-            st.dataframe(pd.DataFrame(failures,columns=["วันที่","ต้องการ","พี่ที่ต้องการ","น้องที่ต้องการ","พี่ที่ว่าง","น้องที่ว่าง","สาเหตุ"]),use_container_width=True,hide_index=True)
+            st.error("一部วันจัดไม่ครบ เพราะคนที่ว่างไม่พอ")
+            st.dataframe(pd.DataFrame(failures,columns=["วันที่","ต้องการ","จัดได้"]),use_container_width=True,hide_index=True)
         else:
             sb.table("duties").delete().eq("month_id",mid).execute()
             sb.table("duties").insert(chosen_rows).execute()
             sb.table("duty_months").update({"status":"ร่างตาราง"}).eq("id",mid).execute()
-            log("auto_schedule",mid,details={"rows":len(chosen_rows),"senior_per_day":senior_need,"newbie_per_day":newbie_need})
-            st.success(f"จัดเวรสำเร็จ: พี่ {senior_need} + น้องใหม่ {newbie_need} ตามเงื่อนไขทีม"); st.rerun()
+            log("auto_schedule",mid,details={"rows":len(chosen_rows)})
+            st.success("จัดเวรสำเร็จเป็นร่างตาราง"); st.rerun()
 
     ds=duties(mid)
     if ds:
