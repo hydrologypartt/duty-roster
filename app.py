@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from collections import defaultdict
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client
 
@@ -15,6 +16,9 @@ if not URL or not KEY:
     st.error("ยังไม่ได้ตั้งค่า SUPABASE_URL และ SUPABASE_KEY")
     st.stop()
 sb = create_client(URL, KEY)
+
+CALENDAR_DIR = os.path.join(os.path.dirname(__file__), "calendar_component")
+calendar_picker = components.declare_component("unavailable_calendar", path=CALENDAR_DIR)
 
 MONTHS = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน",
           "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"]
@@ -257,39 +261,24 @@ if not admin():
     current={x["unavailable_date"] for x in rows}
     open_now=today<=deadline or bool(m["admin_override"])
     if open_now:
-        cal_key=f"calendar_{mid}_{pid}"
-        if cal_key not in st.session_state:
-            st.session_state[cal_key]=set(current)
-        selected=st.session_state[cal_key]
-
         st.markdown("### 📅 ปฏิทินเลือกวันที่ไม่สามารถอยู่เวรได้")
-        st.caption("คลิกวันที่เพื่อเลือก/ยกเลิกได้หลายวัน • วันที่เลือกจะแสดงเป็นปุ่มสีเด่น")
+        st.caption("เลือก/ยกเลิกได้หลายวันโดยหน้าเว็บจะไม่โหลดทุกครั้ง • เลือกเสร็จแล้วกด **💾 บันทึกวันไม่ว่าง** เพียงครั้งเดียว")
         st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
-        head=st.columns(7)
-        for i,c in enumerate(head): c.markdown(f"**{SHORT_WD[i]}**")
 
-        # เติมช่องว่างก่อนวันที่ 1 เพื่อให้เหมือนปฏิทินจริง
-        first=date(m["year"],m["month"],1).weekday()
-        cells=[None]*first+days
-        for start in range(0,len(cells),7):
-            week=cells[start:start+7]
-            cols=st.columns(7)
-            for i,d in enumerate(week):
-                if d is None:
-                    cols[i].write("")
-                    continue
-                iso=d.isoformat(); picked=iso in selected
-                label=f"{d.day}"
-                if cols[i].button(label,type="primary" if picked else "secondary",use_container_width=True,key=f"cal_{mid}_{pid}_{iso}"):
-                    if picked: selected.remove(iso)
-                    else: selected.add(iso)
-                    st.rerun()
+        # ปฏิทินแบบเดิม: กดเลขวันที่โดยตรง และเก็บสถานะไว้ใน browser
+        # จนกว่าจะกดปุ่มบันทึก จึงค่อยส่งค่ากลับมาให้ Streamlit 1 ครั้ง
+        selected = calendar_picker(
+            year=m["year"],
+            month=m["month"],
+            selected=sorted(current),
+            holidays=holiday_map(mid),
+            key=f"calendar_{mid}_{pid}"
+        )
 
-        chosen=[d for d in days if d.isoformat() in selected]
-        st.info(f"เลือกแล้ว {len(chosen)} วัน: {', '.join(f'{d.day:02d}/{d.month:02d}' for d in chosen) if chosen else 'ยังไม่ได้เลือก'}")
-        if st.button("💾 บันทึกวันไม่ว่าง",type="primary"):
-            if used>=max_edits:
-                st.error("คุณใช้สิทธิ์แก้ไขครบแล้ว")
+        if selected is not None:
+            chosen = [d for d in days if d.isoformat() in set(selected)]
+            if used >= max_edits:
+                st.warning("คุณใช้สิทธิ์แก้ไขครบแล้ว")
             else:
                 sb.table("unavailable_days").delete().eq("month_id",mid).eq("person_id",pid).execute()
                 if chosen:
@@ -297,7 +286,9 @@ if not admin():
                         {"month_id":mid,"person_id":pid,"unavailable_date":d.isoformat(),"edit_no":used+1} for d in chosen
                     ]).execute()
                 log("member_update_unavailable",mid,pid,{"edit_no":used+1,"dates":[d.isoformat() for d in chosen]})
-                st.success("บันทึกแล้ว"); st.rerun()
+                st.success(f"บันทึกแล้ว {len(chosen)} วัน")
+                st.rerun()
+
     else:
         st.warning("ปิดรับวันไม่ว่างแล้ว หากต้องการแก้ไขให้ติดต่อ Admin")
         st.write("วันที่แจ้งไว้:", ", ".join(sorted(current)) if current else "ไม่มี")
