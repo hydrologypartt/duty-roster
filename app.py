@@ -231,7 +231,7 @@ with st.sidebar:
         if st.button("ออกจากระบบ",use_container_width=True):
             st.session_state.pop("admin",None); st.rerun()
 
-st.title("📅 ระบบจัดเวรออนไลน์")
+st.title("📅 ระบบจัดเวร")
 
 months=sb.table("duty_months").select("*").order("year",desc=True).order("month",desc=True).execute().data
 
