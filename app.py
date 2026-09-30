@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client
 
-st.set_page_config(page_title="ระบบจัดเวรออนไลน์", page_icon="📅", layout="wide")
+st.set_page_config(page_title="ระบบจัดเวร", page_icon="📅", layout="wide")
 
 URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
 KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
