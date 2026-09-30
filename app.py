@@ -250,7 +250,7 @@ if not admin():
         st.warning("เดือนนี้ยังไม่มีรายชื่อสมาชิก")
         st.stop()
 
-    st.header(f"📝 ลงวันไม่ว่าง — {month_text(m['year'],m['month'])}")
+    st.header(f"📝 วันไม่ว่าง — {month_text(m['year'],m['month'])}")
     ids={p["id"]:p["name"] for p in people}
     pid=st.selectbox("เลือกชื่อของคุณ",list(ids),format_func=lambda x:ids[x])
     rows=[x for x in unavailable(mid) if x["person_id"]==pid]
