@@ -264,7 +264,7 @@ if not admin():
     current={x["unavailable_date"] for x in rows}
     open_now=today<=deadline or bool(m["admin_override"])
     if open_now:
-        st.markdown("### 📅 ปฏิทินเลือกวันที่ไม่สามารถอยู่เวรได้")
+        st.markdown("### 📅 วันที่ไม่สามารถอยู่เวรได้")
         st.caption("เลือก/ยกเลิกได้หลายวันโดยหน้าเว็บจะไม่โหลดทุกครั้ง • เลือกเสร็จแล้วกด **💾 บันทึกวันไม่ว่าง** เพียงครั้งเดียว")
         st.markdown("**จ.** = จันทร์ &nbsp; **อ.** = อังคาร &nbsp; **พ.** = พุธ &nbsp; **พฤ.** = พฤหัสบดี &nbsp; **ศ.** = ศุกร์ &nbsp; **ส.** = เสาร์ &nbsp; **อา.** = อาทิตย์")
 
@@ -297,11 +297,11 @@ if not admin():
         st.write("วันที่แจ้งไว้:", ", ".join(sorted(current)) if current else "ไม่มี")
 
     st.divider()
-    st.subheader("📋 ตารางเวรที่ประกาศ")
+    st.subheader("📋 ตารางเวร")
     ds=duties(mid)
     if ds:
         st.dataframe(style_schedule_df(schedule_matrix(ds), holiday_map(mid)),use_container_width=True,hide_index=True)
-    else: st.info("ยังไม่มีตารางเวรที่ประกาศ")
+    else: st.info("ยังไม่มีตารางเวร")
     st.stop()
 
 # =========================
