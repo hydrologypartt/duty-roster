@@ -231,7 +231,7 @@ with st.sidebar:
         if st.button("ออกจากระบบ",use_container_width=True):
             st.session_state.pop("admin",None); st.rerun()
 
-st.title("📅 ระบบจัดเวร")
+st.title("📅 ระบบจัดเวรฝ่ายสารสนเทศและพยากรณ์น้ำ")
 
 months=sb.table("duty_months").select("*").order("year",desc=True).order("month",desc=True).execute().data
 
@@ -250,7 +250,7 @@ if not admin():
         st.warning("เดือนนี้ยังไม่มีรายชื่อสมาชิก")
         st.stop()
 
-    st.header(f"📝 วันไม่ว่าง — {month_text(m['year'],m['month'])}")
+    st.header(f"📝 วันที่ไม่สามารถอยู่เวรได้ — {month_text(m['year'],m['month'])}")
     ids={p["id"]:p["name"] for p in people}
     pid=st.selectbox("เลือกชื่อของคุณ",list(ids),format_func=lambda x:ids[x])
     rows=[x for x in unavailable(mid) if x["person_id"]==pid]
